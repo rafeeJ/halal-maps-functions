@@ -59,27 +59,58 @@ exports.regionDiscovery = functions.region("europe-west2").runWith({ timeoutSeco
   .onUpdate(async (change, context) => {
 
     const region = context.params.region
-
-    const url = `https://www.ubereats.com/gb/category/${region}-eng/halal`
     const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
     const page = await browser.newPage();
+    
+    try {
+      // Get UberEats.
+      const url = `https://www.ubereats.com/gb/category/${region}-eng/halal`
+      await page.goto(url, { waitUntil: 'networkidle2' });
+      const rs = await page.$x(`//*[@id="main-content"]/div[5]/div/div`)
+      
+      for (const r of rs) {
+        const a = await r.$eval("a", (el) => {
+          let data = {}
+          const d = new Date();
+          
+          data["name"] = el.textContent
+          data["url"] = `https://www.ubereats.com${el.getAttribute("href")}`
+          data["timeStamp"] = d.getTime()
+          
+          return data
+        });
+        await db.collection("regions").doc(region).collection("temp-uber").add(a)
+      }
+    } catch (error) {
+      console.debug("Error getting UberEats restaurants.")
+    }
 
-    await page.goto(url, { waitUntil: 'networkidle2' });
-    const rs = await page.$x(`//*[@id="main-content"]/div[5]/div/div`)
-
-    for (const r of rs) {
-      const a = await r.$eval("a", (el) => {
+    try {
+      // Get Zabihah
+      const url = `https://www.zabihah.com/search?l=${region}%20uk&k=&t=r&s=t`
+      await page.goto(url, { waitUntil: 'networkidle2' });
+      const rs = await page.$x(`/html/body/table[1]/tbody/tr/td[1]/table[11]/tbody/tr/td/table/tbody/tr/td/div[@id='header']`)
+      
+      for (const r of rs) {
+        // For each element.
+        let rName = await r.$eval("div.titlebs", tit => tit.textContent);
+        let address = await r.$eval("div.tinylink", add => add.textContent);
+        let categories = await r.$$eval("div#alertbox2", tit => tit.map((a) => a.textContent));
+        
         let data = {}
         const d = new Date();
-
-        data["name"] = el.textContent
-        data["url"] = `https://www.ubereats.com${el.getAttribute("href")}`
+        
+        data["name"] = rName
+        data["address"] = address
+        data["categories"] = categories
         data["timeStamp"] = d.getTime()
-
-        return data
-      });
-      await db.collection("regions").doc(region).collection("temp").add(a)
+        
+        await db.collection("regions").doc(region).collection("temp-zab").add(data)
+      }
+    } catch (error) {
+      console.debug(error)
     }
+      
   });
 
 exports.restaurantDiscovery = functions.region("europe-west2").runWith({ timeoutSeconds: 300, memory: "1GB" }).firestore.document("regions/{region}/temp/{restaurant}")
@@ -136,7 +167,7 @@ exports.restaurantDiscovery = functions.region("europe-west2").runWith({ timeout
       // Get categories.
       const catEle = await page.$x(`//div[@role='dialog']/div/div[2]/div`);
       let cats = await page.evaluate(el => el.textContent, catEle[1])
-      categories = cats.split("•");
+      categories = cats.split("•").map(ele => ele.trim())
     } catch (error) {
       console.debug("Failed to get the categories.")
     }
@@ -174,15 +205,6 @@ exports.restaurantDiscovery = functions.region("europe-west2").runWith({ timeout
       console.debug("Nothing to add")
       await db.collection("regions").doc(context.params.region).collection("restaurants").doc(context.params.restaurant).set({ address: address , categories: categories })
     }
-
-    // var data = places.data.candidates[0].types.includes("food") ? places.data.candidates[0] : ""
-
-    // if (data.data.candidates) {
-    //   await db.collection("regions").doc(context.params.region).collection("restaurants").doc(context.params.restaurant).update({ restaurantData: data.data.candidates[0] })
-    // } else {
-    //   await db.collection("regions").doc(context.params.region).collection("restaurants").doc(context.params.restaurant).update({ restaurantData: { address: moreInfoString, categories: categories } })
-    // }
-
   });
 
 exports.getRegions = functions.https.onRequest(async (req, res) => {
