@@ -93,6 +93,8 @@ exports.regionDiscovery = functions.region("europe-west2").runWith({ timeoutSeco
       
       for (const r of rs) {
         // For each element.
+
+        let link = await page.evaluate((el) => el.getAttribute("onClick"), r)
         let rName = await r.$eval("div.titlebs", tit => tit.textContent);
         let address = await r.$eval("div.tinylink", add => add.textContent);
         let categories = await r.$$eval("div#alertbox2", tit => tit.map((a) => a.textContent));
@@ -103,6 +105,7 @@ exports.regionDiscovery = functions.region("europe-west2").runWith({ timeoutSeco
         data["name"] = rName
         data["address"] = address
         data["categories"] = categories
+        data["url"] = `https://www.zabihah.com${link.match(/'([^']+)'/)[1]}`
         data["timeStamp"] = d.getTime()
         
         await db.collection("regions").doc(region).collection("temp-zab").add(data)
