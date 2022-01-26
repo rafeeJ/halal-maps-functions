@@ -3,6 +3,13 @@ const Firestore = require("@google-cloud/firestore");
 
 const puppeteer = require("puppeteer");
 const { Client } = require("@googlemaps/google-maps-services-js");
+var _ = require("lodash")
+
+const uberStuff = require("./uber-stuff")
+const zabStuff = require("./zab-stuff")
+
+exports.restaurantDiscoveryUber = uberStuff.restaurantDiscoveryUber;
+exports.restaurantDiscoveryZab = zabStuff.restaurantDiscoveryZab;
 
 const PROJECTID = "halal-dining-uk"
 
@@ -97,7 +104,7 @@ exports.regionDiscovery = functions.region("europe-west2").runWith({ timeoutSeco
         let link = await page.evaluate((el) => el.getAttribute("onClick"), r)
         let rName = await r.$eval("div.titlebs", tit => tit.textContent);
         let address = await r.$eval("div.tinylink", add => add.textContent);
-        let categories = await r.$$eval("div#alertbox2", tit => tit.map((a) => a.textContent));
+        let categories = await r.$$eval("div#alertbox2", tit => tit.map((a) => a.textContent.toLowerCase()));
         
         let data = {}
         const d = new Date();
@@ -114,100 +121,6 @@ exports.regionDiscovery = functions.region("europe-west2").runWith({ timeoutSeco
       console.debug(error)
     }
       
-  });
-
-exports.restaurantDiscovery = functions.region("europe-west2").runWith({ timeoutSeconds: 300, memory: "1GB" }).firestore.document("regions/{region}/temp/{restaurant}")
-  .onCreate(async (snapshot, context) => {
-
-    // Target information.
-    var address;
-    var categories;
-
-    // Get the data we are working with.
-    const restaurantData = snapshot.data();
-    const url = restaurantData.url
-
-    // Launch puppeteer
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1920, height: 1080 })
-    await page.goto(url, { waitUntil: 'networkidle2' });
-
-    try {
-      // Close Modal
-      const modalClose = await page.$x("/html/body/div[1]/div[1]/div/div[5]/div/div/div[2]/div[2]/button")
-      await modalClose[0].click()
-    } catch (error) {
-      console.debug("Error closing modal.")
-    }
-
-    try {
-      // Close Cookie banner
-      const cookieBanner = await page.$x(`//*[@id="cookie-banner"]/div/div/div[2]/button[2]`)
-      await cookieBanner[0].click()
-    } catch (error) {
-      console.debug("Error closing cookie banner.")
-    }
-
-    try {
-      // Try to click the button.
-      const moreInfo = await page.$x(`//a[contains(., "More")]`);
-      await moreInfo[0].click();
-      await page.waitForXPath('//div[@role="dialog"]')
-    } catch (error) {
-      console.debug("Failed to get more info.")
-    }
-
-    try {
-      // Get address.
-      const moreInfoText = await page.$x(`//div[@role="dialog"]/*/button`)
-      address = await moreInfoText[1].$eval("div", (el) => el.textContent)
-    } catch (error) {
-      console.debug("Failed to get the address.")
-    }
-
-    try {
-      // Get categories.
-      const catEle = await page.$x(`//div[@role='dialog']/div/div[2]/div`);
-      let cats = await page.evaluate(el => el.textContent, catEle[1])
-      categories = cats.split("•").map(ele => ele.trim())
-    } catch (error) {
-      console.debug("Failed to get the categories.")
-    }
-
-    var places;
-
-    // Use the name and address to get geolocation.
-    if (process.env.FUNCTIONS_EMULATOR == true || process.env.FUNCTIONS_EMULATOR == "true") {
-      console.debug("Not using API")
-    } else {
-      console.debug("Using Maps API")
-      const client = new Client({});
-
-      places = await client
-        .findPlaceFromText({
-          params: {
-            key: functions.config().map.key,
-            fields: ["name", "geometry/location", "formatted_address", "place_id", "type"],
-            input: `${restaurantData.name} ${address}`,
-            inputtype: "textquery"
-          }
-        })
-
-    }
-    
-    try {
-      var data;
-      if (places.data.candidates[0].types.includes("food")) {
-        data = places.data.candidates[0]
-        await db.collection("regions").doc(context.params.region).collection("restaurants").doc(data.place_id).set({ restaurantData: data, categories: categories })
-      } else {
-        await db.collection("regions").doc(context.params.region).collection("restaurants").doc(context.params.restaurant).set({ address: address , categories: categories })
-      }
-    } catch (error) {
-      console.debug("Nothing to add")
-      await db.collection("regions").doc(context.params.region).collection("restaurants").doc(context.params.restaurant).set({ address: address , categories: categories })
-    }
   });
 
 exports.getRegions = functions.https.onRequest(async (req, res) => {
@@ -234,7 +147,6 @@ exports.createBundle = functions.https.onRequest(async (request, response) => {
   } else {
     console.debug(`region = ${region}`)
   }
-
 
   var regionalRestaurants;
   if (region) {
