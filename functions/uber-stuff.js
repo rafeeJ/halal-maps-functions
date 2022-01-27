@@ -3,6 +3,15 @@ const { Client, Language } = require("@googlemaps/google-maps-services-js");
 const puppeteer = require("puppeteer");
 const Firestore = require("@google-cloud/firestore");
 
+const functionConfig = () => {
+    if (process.env.RUN_LOCALLY) {
+        const fs = require('fs');
+        return JSON.parse(fs.readFileSync('.env.json'));
+    } else {
+      return functions.config();
+    }
+};
+
 const PROJECTID = "halal-dining-uk"
 
 const db = new Firestore({
@@ -75,7 +84,7 @@ exports.restaurantDiscoveryUber = functions.region("europe-west2").runWith({ tim
         }
 
         // Use the name and address to get geolocation.
-        if (process.env.FUNCTIONS_EMULATOR == true || process.env.FUNCTIONS_EMULATOR == "true") {
+        if ((process.env.FUNCTIONS_EMULATOR == true || process.env.FUNCTIONS_EMULATOR == "true") && (functionConfig().map.test_maps == 'false')) {
             console.debug("Not using API")
             try {
                 await db.collection("regions").doc(context.params.region).collection("restaurants").doc(context.params.restaurant).set({ address: address, uberData: uberData })
@@ -86,11 +95,11 @@ exports.restaurantDiscoveryUber = functions.region("europe-west2").runWith({ tim
         } else {
             console.debug("Using Maps API")
             const client = new Client({});
-
+            
             var places = await client
                 .findPlaceFromText({
                     params: {
-                        key: functions.config().map.key,
+                        key: functionConfig().map.key,
                         fields: ["name", "geometry/location", "formatted_address", "place_id", "type"],
                         input: `${restaurantData.name} ${address}`,
                         inputtype: "textquery",
@@ -102,9 +111,10 @@ exports.restaurantDiscoveryUber = functions.region("europe-west2").runWith({ tim
             
             if (bestRestaurant.types.includes("food")) {
                 try {
-                await db.collection("regions").doc(context.params.region).collection("restaurants").doc(bestRestaurant.place_id).set({ restaurantData: data, uberData: uberData }, {merge: true})
+                await db.collection("regions").doc(context.params.region).collection("restaurants").doc(bestRestaurant.place_id).set({ restaurantData: bestRestaurant, uberData: uberData }, {merge: true})
                 } catch (error) {
                     console.debug("Failed adding to db (PROD)")
+                    console.debug(error)
                 }
             } else {
                 // Highest chance is probably not the correct one - leave it.
