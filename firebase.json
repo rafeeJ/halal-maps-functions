@@ -4,22 +4,22 @@
     "indexes": "firestore.indexes.json"
   },
   "functions": {
-    "rewrites" : [
-      {
-        "source": "/createBundle/**",
-        "function": "createBundle"
-      },
-      {
-        "source": "Regions",
-        "function": "getRegions"
-      }
-    ],
     "predeploy": [
       "npm --prefix \"$RESOURCE_DIR\" run lint"
     ]
   },
   "hosting": {
     "public": "public",
+    "rewrites" : [
+      {
+        "source": "/createBundle/**",
+        "function": "createBundle"
+      },
+      {
+        "source": "/regions",
+        "function": "getRegions"
+      }
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",
