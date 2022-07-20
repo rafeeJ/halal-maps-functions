@@ -7,10 +7,8 @@ const puppeteer = require("puppeteer");
 var _ = require("lodash")
 
 const uberStuff = require("./uber-stuff")
-const zabStuff = require("./zab-stuff")
 
 exports.restaurantDiscoveryUber = uberStuff.restaurantDiscoveryUber;
-exports.restaurantDiscoveryZab = zabStuff.restaurantDiscoveryZab;
 
 const PROJECTID = "halal-dining-uk"
 
@@ -19,59 +17,64 @@ var db = new Firestore({
   timestampsInSnapshots: true,
 });
 
-exports.getZabRestaurants = functions.region("us-east4").runWith({ timeoutSeconds: 300, memory: "1GB" }).https.onRequest(async (req, res) => {
-  const region = "manchester"
-  const destinationURL = `https://www.zabihah.com/search?l=${region}%20uk&k=t=r&s=d&r=64`
-  const rawResponse = await fetch(destinationURL)
+exports.getZabRestaurants = functions.region("us-east4").runWith({ timeoutSeconds: 300, memory: "1GB" })
+  .https.onRequest(async (req, res) => {
+
+  const destinationURL = `https://www.zabihah.com/sub/United-Kingdom/North-West/Greater-Manchester/ffn3Em1F05`
+  const rawResponse = await fetch(destinationURL, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9'
+    }
+  });
+
   const body = await rawResponse.text()
-  
-  const myRe = /(restLocations = )\[(.|\n)+?(?=\]\;)];/
-  const locations = myRe.exec(body)
-  
-  res.send(locations)
-  
 
-  // const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-  // const page = await browser.newPage();
-  // page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36')
+  if (body.length === -1) {
+    res.send(404)
+  }
+  console.debug("We have a response")
 
-  // var count = 0;
-  // var added = 0;
+  if (body.indexOf('restLocations') === -1) {
+    console.debug("Website is messed up, leave,")
+    res.send(404)
+  } else {
+    console.debug("We have some locations!");
 
-  // try {
-  //   // Get Zabihah
-  //   const url = `https://www.zabihah.com/search?l=${region}%20uk&k=&t=r&s=t`
-  //   await page.goto(url, { waitUntil: 'load', timeout: 0 });
-  //   const rs = await page.$x(`//div[@id='header']`)
-  //   await page.waitForXPath(`//div[@id='header']`, { timeout: 0 })
-  //   count = rs.length
-  //   console.debug(`Found ${count} Zabihah restaurants.`)
+    const myRe = /restLocations(.*)\];/gmsi
+    var results = myRe.exec(body);
+    results = results[0].split('];')[0]
 
-  //   for (const r of rs) {
-  //     // For each element.
-  //     let link = await page.evaluate((el) => el.getAttribute("onClick"), r)
-  //     let rName = await r.$eval("div.titlebs", tit => tit.textContent);
-  //     let address = await r.$eval("div.tinylink", add => add.textContent);
-  //     let categories = await r.$$eval("div#alertbox2", tit => tit.map((a) => a.textContent.toLowerCase()));
+    const restaurantList = [...results.matchAll(/{[^}]+}/gmis)]
 
-  //     let data = {}
-  //     const d = new Date();
+    for (const val of restaurantList) {
+      let restaurant = val[0]
+      const urlRe = /(\/biz\/.*)"/gmsi
+      var url = urlRe.exec(restaurant)
 
-  //     data["name"] = rName
-  //     data["address"] = address
-  //     data["categories"] = categories
-  //     data["url"] = `https://www.zabihah.com${link.match(/'([^']+)'/)[1]}`
-  //     data["timeStamp"] = d.getTime()
-
-  //     await db.collection("regions").doc(region).collection("temp-zab").add(data)
-  //     added = added + 1
-  //   }
-  // } catch (error) {
-  //   console.debug(error)
-  // }
-  // console.debug(`Finished adding ${added} out of ${count} Zabihah restaurants`)
-  // res.status(200)
+      let data = { url: url[1] }
+      await db.collection("regions").doc('manchester').collection("temp-zab").add(data)
+    }
+  }
+  res.send(200)
 });
+
+
+exports.processURL = functions.region("europe-west2").runWith({ timeoutSeconds: 300, memory: "1GB" }).firestore.document("regions/{region}/temp-zab/{restaurant}")
+  .onCreate(async (snapshot, context) => {
+    const url = snapshot.data().url
+
+    const oneRest = await fetch(`https://www.zabihah.com${url}`)
+    const bodyRest = await oneRest.text()
+
+    const restRe = /<script type="application\/ld\+json">(.*)<\/script/gmis
+    let jsonEsq = restRe.exec(bodyRest)
+    jsonEsq = jsonEsq[0].split('</script>')[0]
+    jsonEsq = jsonEsq.replace('<script type="application/ld+json">', '')
+    restaurantJSON = JSON.parse(jsonEsq)
+
+    await db.collection("regions").doc(context.params.region).collection("restaurants").doc().set(restaurantJSON)
+  });
 
 exports.regionDiscoveryUber = functions.region("europe-west2").runWith({ timeoutSeconds: 300, memory: "1GB" }).firestore.document("regions/{region}")
   .onUpdate(async (change, context) => {
