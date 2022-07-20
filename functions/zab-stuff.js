@@ -2,6 +2,7 @@ const functions = require("firebase-functions");
 const { Client, Language } = require("@googlemaps/google-maps-services-js");
 const puppeteer = require("puppeteer");
 const Firestore = require("@google-cloud/firestore");
+var os = require('os');
 
 const functionConfig = () => {
     if (process.env.RUN_LOCALLY) {
@@ -35,7 +36,7 @@ exports.restaurantDiscoveryZab = functions.region("europe-west2").runWith({ time
         }
 
         // Use the name and address to get geolocation.
-        if (process.env.FUNCTIONS_EMULATOR == true || process.env.FUNCTIONS_EMULATOR == "true") {
+        if (process.env.TEST_MAPS === "false") {
             console.debug("Not using API")
             try {
                 await db.collection("regions").doc(context.params.region).collection("restaurants").doc(context.params.restaurant).set({ address: address, zabData: zabData })

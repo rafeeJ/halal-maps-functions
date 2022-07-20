@@ -1,8 +1,9 @@
 const functions = require("firebase-functions");
 const Firestore = require("@google-cloud/firestore");
 
+const fetch = require("node-fetch");
+
 const puppeteer = require("puppeteer");
-const { Client } = require("@googlemaps/google-maps-services-js");
 var _ = require("lodash")
 
 const uberStuff = require("./uber-stuff")
@@ -13,73 +14,63 @@ exports.restaurantDiscoveryZab = zabStuff.restaurantDiscoveryZab;
 
 const PROJECTID = "halal-dining-uk"
 
-const db = new Firestore({
+var db = new Firestore({
   projectID: PROJECTID,
   timestampsInSnapshots: true,
 });
 
 exports.getZabRestaurants = functions.region("us-east4").runWith({ timeoutSeconds: 300, memory: "1GB" }).https.onRequest(async (req, res) => {
-  const region = 'manchester'
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-  const page = await browser.newPage();
-  page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36')
+  const region = "manchester"
+  const destinationURL = `https://www.zabihah.com/search?l=${region}%20uk&k=t=r&s=d&r=64`
+  const rawResponse = await fetch(destinationURL)
+  const body = await rawResponse.text()
+  
+  const myRe = /(restLocations = )\[(.|\n)+?(?=\]\;)];/
+  const locations = myRe.exec(body)
+  
+  res.send(locations)
+  
 
-  var count = 0;
-  var added = 0;
+  // const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+  // const page = await browser.newPage();
+  // page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36')
 
-  try {
-    // Get Zabihah
-    const url = `https://www.zabihah.com/search?l=${region}%20uk&k=&t=r&s=t`
-    await page.goto(url, { waitUntil: 'load', timeout: 0 });
-    const rs = await page.$x(`//div[@id='header']`)
-    await page.waitForXPath(`//div[@id='header']`, { timeout: 0 })
-    count = rs.length
-    console.debug(`Found ${count} Zabihah restaurants.`)
+  // var count = 0;
+  // var added = 0;
 
-    for (const r of rs) {
-      // For each element.
-      let link = await page.evaluate((el) => el.getAttribute("onClick"), r)
-      let rName = await r.$eval("div.titlebs", tit => tit.textContent);
-      let address = await r.$eval("div.tinylink", add => add.textContent);
-      let categories = await r.$$eval("div#alertbox2", tit => tit.map((a) => a.textContent.toLowerCase()));
+  // try {
+  //   // Get Zabihah
+  //   const url = `https://www.zabihah.com/search?l=${region}%20uk&k=&t=r&s=t`
+  //   await page.goto(url, { waitUntil: 'load', timeout: 0 });
+  //   const rs = await page.$x(`//div[@id='header']`)
+  //   await page.waitForXPath(`//div[@id='header']`, { timeout: 0 })
+  //   count = rs.length
+  //   console.debug(`Found ${count} Zabihah restaurants.`)
 
-      let data = {}
-      const d = new Date();
+  //   for (const r of rs) {
+  //     // For each element.
+  //     let link = await page.evaluate((el) => el.getAttribute("onClick"), r)
+  //     let rName = await r.$eval("div.titlebs", tit => tit.textContent);
+  //     let address = await r.$eval("div.tinylink", add => add.textContent);
+  //     let categories = await r.$$eval("div#alertbox2", tit => tit.map((a) => a.textContent.toLowerCase()));
 
-      data["name"] = rName
-      data["address"] = address
-      data["categories"] = categories
-      data["url"] = `https://www.zabihah.com${link.match(/'([^']+)'/)[1]}`
-      data["timeStamp"] = d.getTime()
+  //     let data = {}
+  //     const d = new Date();
 
-      await db.collection("regions").doc(region).collection("temp-zab").add(data)
-      added = added + 1
-    }
-  } catch (error) {
-    console.debug(error)
-  }
-  console.debug(`Finished adding ${added} out of ${count} Zabihah restaurants`)
-  res.status(200)
-});
+  //     data["name"] = rName
+  //     data["address"] = address
+  //     data["categories"] = categories
+  //     data["url"] = `https://www.zabihah.com${link.match(/'([^']+)'/)[1]}`
+  //     data["timeStamp"] = d.getTime()
 
-exports.webhook = functions.region("europe-west2").https.onRequest(async (req, res) => {
-  const regions = [];
-
-  // Get the regions in the db!
-  await db.collection("regions").get()
-    .then((querySnapshot) => {
-      querySnapshot.forEach((doc) => {
-        regions.push(doc.data().region);
-      });
-    });
-  const d = new Date();
-
-  // For each region, update it to indicate that we are running a batch job.
-  regions.forEach((region) => {
-    const ref = db.collection("regions").doc(region);
-    ref.update({ timeStamp: d });
-  })
-  res.status(200).send("Completed")
+  //     await db.collection("regions").doc(region).collection("temp-zab").add(data)
+  //     added = added + 1
+  //   }
+  // } catch (error) {
+  //   console.debug(error)
+  // }
+  // console.debug(`Finished adding ${added} out of ${count} Zabihah restaurants`)
+  // res.status(200)
 });
 
 exports.regionDiscoveryUber = functions.region("europe-west2").runWith({ timeoutSeconds: 300, memory: "1GB" }).firestore.document("regions/{region}")
@@ -122,7 +113,6 @@ exports.regionDiscoveryUber = functions.region("europe-west2").runWith({ timeout
 exports.regionDiscoveryZab = functions.region("us-east4").runWith({ timeoutSeconds: 300, memory: "1GB" }).firestore.document("regions/{region}")
   .onUpdate(async (change, context) => {
 
-    const region = context.params.region
     const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
     const page = await browser.newPage();
     page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36')
@@ -177,35 +167,3 @@ exports.getRegions = functions.https.onRequest(async (req, res) => {
 
   res.end(bundleBuffer);
 })
-
-exports.createBundle = functions.https.onRequest(async (request, response) => {
-  var region = request.params[0].replace("createBundle/", "");
-  if (!region) {
-    console.debug("There was no region, defaulting to the request body.");
-    region = request.body.data.region
-    console.debug(`region = ${region}`)
-  } else {
-    console.debug(`region = ${region}`)
-  }
-
-  var regionalRestaurants;
-  if (region) {
-    // Query the 50 latest stories
-    regionalRestaurants = await db.collection("regions")
-      .doc(region).collection("restaurants")
-      .get();
-  } else {
-    response.status(404).send("Failed.")
-  }
-
-  // Build the bundle from the query results
-  const bundleBuffer = db.bundle(`restaurants-${region}`)
-    .add(`latest-${region}-restaurant-query`, regionalRestaurants)
-    .build();
-
-  // Cache the response for up to 5 minutes;
-  // see https://firebase.google.com/docs/hosting/manage-cache
-  response.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
-
-  response.end(bundleBuffer);
-});
