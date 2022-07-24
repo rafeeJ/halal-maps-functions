@@ -144,11 +144,20 @@ exports.processURL = functions.region("europe-west2")
       }})
       
       var data = places.data.candidates
-      var restaurantToAdd = evaluatePlaces(data)
+      var restaurantToAdd;
       
+      if (data.length > 0) {
+        restaurantToAdd = evaluatePlaces(data)
+      } else {
+        console.debug(`url to retry: ${url}`)
+        console.debug("no data, printing for debug reasons, status:")
+        console.debug(places.data.status)
+        console.debug("===============")
+        console.debug(data)
+      }
+
       if (restaurantToAdd) {
         var dataToPost = { ...flags, ...restaurantToAdd}
-        console.debug(dataToPost)
         await db.collection("regions").doc(context.params.region).collection("restaurants").doc(restaurantToAdd.place_id).set(dataToPost)
       } else {
         console.debug("Failed to add to DB.")
@@ -185,7 +194,7 @@ exports.restaurantFromPlaceID = functions.region("europe-west2")
         deets.geometry.location.hash = geofire.geohashForLocation([deets.geometry.location.lat, deets.geometry.location.lng])
         
         if (deets.business_status === "OPERATIONAL") {  
-          docSnapshot.ref.set(deets)
+          docSnapshot.ref.set(deets, { merge: true})
         } else {
           console.log("Restaurant is closed now.")
           docSnapshot.ref.delete()
