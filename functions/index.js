@@ -182,7 +182,7 @@ exports.restaurantFromPlaceID = functions.region("europe-west2")
       key: process.env.MAPS_API,
       place_id: context.params.placeID,
       language: Language.en_GB,
-      fields: ["name", "geometry/location", "formatted_address", "type", "business_status", "formatted_phone_number", "opening_hours/weekday_text", "website", "price_level", "rating"]
+      fields: ["name", "geometry/location", "formatted_address", "type", "business_status", "formatted_phone_number", "opening_hours/weekday_text", "website", "price_level", "rating", "address_components"]
     }
 
     if (process.env.TEST_MAPS === 'true') {
