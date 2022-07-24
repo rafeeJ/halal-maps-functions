@@ -1,16 +1,10 @@
 const functions = require("firebase-functions");
 const Firestore = require("@google-cloud/firestore");
-
-const fetch = require("node-fetch");
-
-const puppeteer = require("puppeteer");
-var _ = require("lodash")
-
-const uberStuff = require("./uber-stuff");
-const { Client, Language } = require("@googlemaps/google-maps-services-js");
+const { Client, Language, PlaceData } = require("@googlemaps/google-maps-services-js");
 const geofire = require('geofire-common');
 
-exports.restaurantDiscoveryUber = uberStuff.restaurantDiscoveryUber;
+const fetch = require("node-fetch");
+var _ = require("lodash")
 
 const PROJECTID = "halal-dining-uk"
 
@@ -19,7 +13,6 @@ var db = new Firestore({
   projectID: PROJECTID,
   timestampsInSnapshots: true,
 });
-
 
 const scrapeZabPage = async (url) => {
   const rawResponse = await fetch(url, {
@@ -73,33 +66,14 @@ const lookForFlags = (text) => {
 }
 
 const evaluatePlaces = (placeArray) => {
-
+  /** @type {PlaceData} */
+  const mostLikley = placeArray[0]
+  if (mostLikley.types.includes("food")) {
+    return mostLikley
+  } else {
+    return null
+  }
 }
-
-exports.getZabRestaurants = functions.region("us-east4")
-  .runWith({ timeoutSeconds: 60, memory: "256MB" })
-  .https.onRequest(async (req, res) => {
-
-    const destinationURL = `https://www.zabihah.com/sub/United-Kingdom/North-West/Greater-Manchester/ffn3Em1F05`
-    const restaurantList = await scrapeZabPage(destinationURL)
-
-    for (const val of restaurantList) {
-      let restaurant = val
-      const urlRe = /(\/biz\/.*)"/gmsi
-      var url = urlRe.exec(restaurant)
-      var restaurantUrl = url[1]
-
-      var docRef = db.collection("regions").doc("manchester").collection("temp")
-      var doc = await docRef.where('url', '==', restaurantUrl).get()
-
-      if (doc.empty) {
-        await db.collection("regions").doc('manchester').collection("temp").add({ url: restaurantUrl })
-      }
-
-    }
-
-    res.send(200)
-  });
 
 exports.generateRestaurants = functions.region("europe-west2")
   .runWith({ timeoutSeconds: 60, memory: "256MB" })
@@ -159,20 +133,32 @@ exports.processURL = functions.region("europe-west2")
       console.debug("Using maps API")
       const client = new Client({});
 
-      var places = await client.findPlaceFromText({
+      console.debug(process.env.MAPS_API)
+
+      var places = await client.findPlaceFromText({params: {
         key: process.env.MAPS_API,
         inputtype: "textquery",
         input: `${restaurantJSON.name} ${restaurantJSON.address.streetAddress} ${restaurantJSON.address.postalCode}`,
         language: Language.en_GB,
-        fields: ["name", "geometry/location", "formatted_address", "place_id", "type"],
-      })
-
-      evaluatePlaces(places)
+        fields: ["name", "place_id", "type"],
+      }})
+      
+      var data = places.data.candidates
+      var restaurantToAdd = evaluatePlaces(data)
+      
+      if (restaurantToAdd) {
+        var dataToPost = { ...flags, ...restaurantToAdd}
+        console.debug(dataToPost)
+        await db.collection("regions").doc(context.params.region).collection("restaurants").doc(restaurantToAdd.place_id).set(dataToPost)
+      } else {
+        console.debug("Failed to add to DB.")
+      }
+    } else {
+      var dataToPost = { ...restaurantJSON, ...flags }
+      await db.collection("regions").doc(context.params.region).collection("restaurants").doc().set(dataToPost)
     }
 
-    var dataToPost = { ...restaurantJSON, ...flags }
 
-    await db.collection("regions").doc(context.params.region).collection("restaurants").doc().set(dataToPost)
   });
 
 exports.restaurantFromPlaceID = functions.region("europe-west2")
@@ -187,7 +173,7 @@ exports.restaurantFromPlaceID = functions.region("europe-west2")
       key: process.env.MAPS_API,
       place_id: context.params.placeID,
       language: Language.en_GB,
-      fields: ["name", "geometry/location", "formatted_address", "type", "business_status", "formatted_phone_number", "opening_hours/weekday_text", "website", "price_level"]
+      fields: ["name", "geometry/location", "formatted_address", "type", "business_status", "formatted_phone_number", "opening_hours/weekday_text", "website", "price_level", "rating"]
     }
 
     if (process.env.TEST_MAPS === 'true') {
