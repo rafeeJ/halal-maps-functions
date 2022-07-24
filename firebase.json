@@ -12,10 +12,6 @@
     "public": "public",
     "rewrites" : [
       {
-        "source": "/createBundle/**",
-        "function": "createBundle"
-      },
-      {
         "source": "/regions",
         "function": "getRegions"
       }
