@@ -76,7 +76,7 @@ const evaluatePlaces = (placeArray) => {
 }
 
 exports.generateRestaurants = functions.region("europe-west2")
-  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .runWith({ timeoutSeconds: 180, memory: "256MB" })
   .firestore.document("regions/{region}")
   .onCreate(async (snapshot, context) => {
 
