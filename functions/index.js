@@ -1,167 +1,213 @@
 const functions = require("firebase-functions");
 const Firestore = require("@google-cloud/firestore");
+const { Client, Language, PlaceData } = require("@googlemaps/google-maps-services-js");
+const geofire = require('geofire-common');
 
-const puppeteer = require("puppeteer");
-const { Client } = require("@googlemaps/google-maps-services-js");
+const fetch = require("node-fetch");
 var _ = require("lodash")
-
-const uberStuff = require("./uber-stuff")
-const zabStuff = require("./zab-stuff")
-
-exports.restaurantDiscoveryUber = uberStuff.restaurantDiscoveryUber;
-exports.restaurantDiscoveryZab = zabStuff.restaurantDiscoveryZab;
 
 const PROJECTID = "halal-dining-uk"
 
-const db = new Firestore({
+/** @type {Firestore} */
+var db = new Firestore({
   projectID: PROJECTID,
   timestampsInSnapshots: true,
 });
 
-exports.getZabRestaurants = functions.region("us-east4").runWith({ timeoutSeconds: 300, memory: "1GB" }).https.onRequest(async (req, res) => {
-  const region = 'manchester'
-  const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-  const page = await browser.newPage();
-  page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36')
-
-  var count = 0;
-  var added = 0;
-
-  try {
-    // Get Zabihah
-    const url = `https://www.zabihah.com/search?l=${region}%20uk&k=&t=r&s=t`
-    await page.goto(url, { waitUntil: 'load', timeout: 0 });
-    const rs = await page.$x(`//div[@id='header']`)
-    await page.waitForXPath(`//div[@id='header']`, { timeout: 0 })
-    count = rs.length
-    console.debug(`Found ${count} Zabihah restaurants.`)
-
-    for (const r of rs) {
-      // For each element.
-      let link = await page.evaluate((el) => el.getAttribute("onClick"), r)
-      let rName = await r.$eval("div.titlebs", tit => tit.textContent);
-      let address = await r.$eval("div.tinylink", add => add.textContent);
-      let categories = await r.$$eval("div#alertbox2", tit => tit.map((a) => a.textContent.toLowerCase()));
-
-      let data = {}
-      const d = new Date();
-
-      data["name"] = rName
-      data["address"] = address
-      data["categories"] = categories
-      data["url"] = `https://www.zabihah.com${link.match(/'([^']+)'/)[1]}`
-      data["timeStamp"] = d.getTime()
-
-      await db.collection("regions").doc(region).collection("temp-zab").add(data)
-      added = added + 1
+const scrapeZabPage = async (url) => {
+  const rawResponse = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9'
     }
-  } catch (error) {
-    console.debug(error)
-  }
-  console.debug(`Finished adding ${added} out of ${count} Zabihah restaurants`)
-  res.status(200)
-});
-
-exports.webhook = functions.region("europe-west2").https.onRequest(async (req, res) => {
-  const regions = [];
-
-  // Get the regions in the db!
-  await db.collection("regions").get()
-    .then((querySnapshot) => {
-      querySnapshot.forEach((doc) => {
-        regions.push(doc.data().region);
-      });
-    });
-  const d = new Date();
-
-  // For each region, update it to indicate that we are running a batch job.
-  regions.forEach((region) => {
-    const ref = db.collection("regions").doc(region);
-    ref.update({ timeStamp: d });
   })
-  res.status(200).send("Completed")
-});
 
-exports.regionDiscoveryUber = functions.region("europe-west2").runWith({ timeoutSeconds: 300, memory: "1GB" }).firestore.document("regions/{region}")
-  .onUpdate(async (change, context) => {
+  const body = await rawResponse.text()
 
-    const region = context.params.region
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-    const page = await browser.newPage();
+  if (body.length === -1) {
+    return null
+  }
+  console.debug("We have a response")
 
-    var count = 0;
-    var added = 0;
+  if (body.indexOf('restLocations') === -1) {
+    console.debug("Website is messed up, leave,")
+    return null
+  } else {
+    console.debug("We have some locations!");
 
-    try {
-      // Get UberEats.
-      const url = `https://www.ubereats.com/gb/category/${region}-eng/halal`
-      await page.goto(url, { waitUntil: 'networkidle2' });
-      const rs = await page.$x(`//*[@id="main-content"]/div[5]/div/div`)
-      count = rs.length
-      console.debug(`Found ${count} UberEats restaurants.`)
-      for (const r of rs) {
-        const a = await r.$eval("a", (el) => {
-          let data = {}
-          const d = new Date();
+    const myRe = /restLocations(.*)\];/gmsi
+    var results = myRe.exec(body);
+    results = results[0].split('];')[0]
 
-          data["name"] = el.textContent
-          data["url"] = `https://www.ubereats.com${el.getAttribute("href")}`
-          data["timeStamp"] = d.getTime()
+    const restaurantList = [...results.matchAll(/{[^}]+}/gmis)].map(val => val[0])
+    return restaurantList
+  }
+}
 
-          return data
-        });
-        await db.collection("regions").doc(region).collection("temp-uber").add(a)
-        added = added + 1
+const lookForFlags = (text) => {
+  let m = {}
+
+  if (text.toLowerCase().indexOf('alcohol-free') > -1) {
+    // no alcohol served.
+    m['servesAlcohol'] = false
+  } else {
+    // alcohol may be served.
+    m['servesAlcohol'] = true
+  }
+
+  if (text.toLowerCase().indexOf('full halal menu') > -1) {
+    // full halal menu
+    m['fullHalal'] = true
+  } else {
+    // Non-halal options.
+    m['fullHalal'] = false
+  }
+  return m
+}
+
+const evaluatePlaces = (placeArray) => {
+  /** @type {PlaceData} */
+  const mostLikley = placeArray[0]
+  if (mostLikley.types.includes("food")) {
+    return mostLikley
+  } else {
+    return null
+  }
+}
+
+exports.generateRestaurants = functions.region("europe-west2")
+  .runWith({ timeoutSeconds: 180, memory: "256MB" })
+  .firestore.document("regions/{region}")
+  .onCreate(async (snapshot, context) => {
+
+    const regionName = context.params.region;
+
+    var regionData = snapshot.data();
+
+    /** @type {Array<string>} */
+    var areasToScrape = regionData.areas;
+
+    for (const area of areasToScrape) {
+      // area should be a URL to scrape!
+      const areaRestaurants = await scrapeZabPage(area)
+
+      for (const val of areaRestaurants) {
+
+        const urlRe = /(\/biz\/.*)"/gmsi
+        var url = urlRe.exec(val)
+        var restaurantUrl = url[1]
+
+        let data = { url: restaurantUrl }
+
+        var docRef = db.collection("regions").doc(regionName).collection("temp")
+        var doc = await docRef.where('url', '==', restaurantUrl).get()
+
+        if (doc.empty) {
+          await db.collection("regions").doc(regionName).collection("temp").add(data)
+        }
       }
-    } catch (error) {
-      console.debug("Error getting UberEats restaurants.")
     }
-    console.debug(`Finished adding ${added} out of ${count} UberEats restaurants`)
   });
 
-exports.regionDiscoveryZab = functions.region("us-east4").runWith({ timeoutSeconds: 300, memory: "1GB" }).firestore.document("regions/{region}")
-  .onUpdate(async (change, context) => {
+exports.processURL = functions.region("europe-west2")
+  .runWith({ timeoutSeconds: 300, memory: "256MB" })
+  .firestore.document("regions/{region}/temp/{restaurant}")
+  .onCreate(async (snapshot, context) => {
+    const url = snapshot.data().url
 
-    const region = context.params.region
-    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
-    const page = await browser.newPage();
-    page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36')
+    const restaurantData = await fetch(`https://www.zabihah.com${url}`)
+    const body = await restaurantData.text()
 
-    var count = 0;
-    var added = 0;
 
-    try {
-      // Get Zabihah
-      const url = `https://www.zabihah.com/search?l=${region}%20uk&k=&t=r&s=t`
-      await page.goto(url, { waitUntil: 'load', timeout: 0 });
-      const rs = await page.$x(`//div[@id='header']`)
-      await page.waitForXPath(`//div[@id='header']`, { timeout: 0 })
-      count = rs.length
-      console.debug(`Found ${count} Zabihah restaurants.`)
+    const restRe = /<script type="application\/ld\+json">(.*)<\/script/gmis
+    let jsonEsq = restRe.exec(body)
+    jsonEsq = jsonEsq[0].split('</script>')[0]
+    jsonEsq = jsonEsq.replace('<script type="application/ld+json">', '')
+    restaurantJSON = JSON.parse(jsonEsq)
 
-      for (const r of rs) {
-        // For each element.
-        let link = await page.evaluate((el) => el.getAttribute("onClick"), r)
-        let rName = await r.$eval("div.titlebs", tit => tit.textContent);
-        let address = await r.$eval("div.tinylink", add => add.textContent);
-        let categories = await r.$$eval("div#alertbox2", tit => tit.map((a) => a.textContent.toLowerCase()));
+    // Deal with this stuff.
+    var flags = lookForFlags(body)
+    flags.categories = restaurantJSON.servesCuisine
 
-        let data = {}
-        const d = new Date();
+    if (process.env.TEST_MAPS === 'true') {
+      console.debug("Using maps API")
+      const client = new Client({});
 
-        data["name"] = rName
-        data["address"] = address
-        data["categories"] = categories
-        data["url"] = `https://www.zabihah.com${link.match(/'([^']+)'/)[1]}`
-        data["timeStamp"] = d.getTime()
+      console.debug(process.env.MAPS_API)
 
-        await db.collection("regions").doc(region).collection("temp-zab").add(data)
-        added = added + 1
+      var places = await client.findPlaceFromText({params: {
+        key: process.env.MAPS_API,
+        inputtype: "textquery",
+        input: `${restaurantJSON.name} ${restaurantJSON.address.streetAddress} ${restaurantJSON.address.postalCode}`,
+        language: Language.en_GB,
+        fields: ["name", "place_id", "type"],
+      }})
+      
+      var data = places.data.candidates
+      var restaurantToAdd;
+      
+      if (data.length > 0) {
+        restaurantToAdd = evaluatePlaces(data)
+      } else {
+        console.debug(`url to retry: ${url}`)
+        console.debug("no data, printing for debug reasons, status:")
+        console.debug(places.data.status)
+        console.debug("===============")
+        console.debug(data)
       }
-    } catch (error) {
-      console.debug(error)
+
+      if (restaurantToAdd) {
+        var dataToPost = { ...flags, ...restaurantToAdd}
+        await db.collection("regions").doc(context.params.region).collection("restaurants").doc(restaurantToAdd.place_id).set(dataToPost)
+      } else {
+        console.debug("Failed to add to DB.")
+      }
+    } else {
+      var dataToPost = { ...restaurantJSON, ...flags }
+      await db.collection("regions").doc(context.params.region).collection("restaurants").doc().set(dataToPost)
     }
-    console.debug(`Finished adding ${added} out of ${count} Zabihah restaurants`)
+
+
+  });
+
+exports.restaurantFromPlaceID = functions.region("europe-west2")
+  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .firestore.document("regions/{region}/restaurants/{placeID}")
+  .onCreate(async (docSnapshot, context) => {
+    const client = new Client({});
+
+    var placeDetails;
+
+    const params = {
+      key: process.env.MAPS_API,
+      place_id: context.params.placeID,
+      language: Language.en_GB,
+      fields: ["name", "geometry/location", "formatted_address", "type", "business_status", "formatted_phone_number", "opening_hours/weekday_text", "website", "price_level", "rating", "address_components"]
+    }
+
+    if (process.env.TEST_MAPS === 'true') {
+      
+      try {
+        
+        placeDetails = await client.placeDetails({ params: params })
+        var deets = placeDetails.data.result
+        deets.geometry.location.hash = geofire.geohashForLocation([deets.geometry.location.lat, deets.geometry.location.lng])
+        
+        if (deets.business_status === "OPERATIONAL") {  
+          docSnapshot.ref.set(deets, { merge: true})
+        } else {
+          console.log("Restaurant is closed now.")
+          docSnapshot.ref.delete()
+        }
+      
+      } catch (error) {
+        
+        console.debug(error.response.data)
+
+      }
+    } else {
+      console.debug("We are not using the map API right now.")
+    }
   });
 
 exports.getRegions = functions.https.onRequest(async (req, res) => {
@@ -177,35 +223,3 @@ exports.getRegions = functions.https.onRequest(async (req, res) => {
 
   res.end(bundleBuffer);
 })
-
-exports.createBundle = functions.https.onRequest(async (request, response) => {
-  var region = request.params[0].replace("createBundle/", "");
-  if (!region) {
-    console.debug("There was no region, defaulting to the request body.");
-    region = request.body.data.region
-    console.debug(`region = ${region}`)
-  } else {
-    console.debug(`region = ${region}`)
-  }
-
-  var regionalRestaurants;
-  if (region) {
-    // Query the 50 latest stories
-    regionalRestaurants = await db.collection("regions")
-      .doc(region).collection("restaurants")
-      .get();
-  } else {
-    response.status(404).send("Failed.")
-  }
-
-  // Build the bundle from the query results
-  const bundleBuffer = db.bundle(`restaurants-${region}`)
-    .add(`latest-${region}-restaurant-query`, regionalRestaurants)
-    .build();
-
-  // Cache the response for up to 5 minutes;
-  // see https://firebase.google.com/docs/hosting/manage-cache
-  response.set('Cache-Control', 'public, max-age=86400, s-maxage=604800');
-
-  response.end(bundleBuffer);
-});
