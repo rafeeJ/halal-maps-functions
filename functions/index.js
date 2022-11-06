@@ -2,6 +2,7 @@ const functions = require("firebase-functions");
 const Firestore = require("@google-cloud/firestore");
 const { Client, Language, PlaceData } = require("@googlemaps/google-maps-services-js");
 const geofire = require('geofire-common');
+const mailchimp = require('@mailchimp/mailchimp_marketing')
 
 const fetch = require("node-fetch");
 var _ = require("lodash")
@@ -12,6 +13,11 @@ const PROJECTID = "halal-dining-uk"
 var db = new Firestore({
   projectID: PROJECTID,
   timestampsInSnapshots: true,
+});
+
+mailchimp.setConfig({
+  apiKey: process.env.MAILCHIMP_API_KEY,
+  server: process.env.MAILCHIMP_API_SERVER // e.g. us1
 });
 
 const scrapeZabPage = async (url) => {
@@ -75,6 +81,39 @@ const evaluatePlaces = (placeArray) => {
   }
 }
 
+const addToMailchimp = async (email) => {
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  var memberToAdd = {
+    email_address: email,
+    status: 'subscribed',
+  }
+
+  try {
+    await mailchimp.lists.addListMember(process.env.MAILCHIMP_AUDIENCE_ID, memberToAdd);
+    return [true, null]
+  } catch (error) {
+    return [false, error]
+  }
+}
+
+const sendEmail = async () => {
+  
+}
+
+exports.sendWelcomeEmail = functions.auth.user().onCreate(async (user) => {
+  const email = user.email
+  const name = user.displayName
+
+  const status = await addToMailchimp(email);
+
+
+  // await addToMailchimp
+  // await sendWelcomeEmail
+});
+
 exports.generateRestaurants = functions.region("europe-west2")
   .runWith({ timeoutSeconds: 180, memory: "256MB" })
   .firestore.document("regions/{region}")
@@ -135,17 +174,19 @@ exports.processURL = functions.region("europe-west2")
 
       console.debug(process.env.MAPS_API)
 
-      var places = await client.findPlaceFromText({params: {
-        key: process.env.MAPS_API,
-        inputtype: "textquery",
-        input: `${restaurantJSON.name} ${restaurantJSON.address.streetAddress} ${restaurantJSON.address.postalCode}`,
-        language: Language.en_GB,
-        fields: ["name", "place_id", "type"],
-      }})
-      
+      var places = await client.findPlaceFromText({
+        params: {
+          key: process.env.MAPS_API,
+          inputtype: "textquery",
+          input: `${restaurantJSON.name} ${restaurantJSON.address.streetAddress} ${restaurantJSON.address.postalCode}`,
+          language: Language.en_GB,
+          fields: ["name", "place_id", "type"],
+        }
+      })
+
       var data = places.data.candidates
       var restaurantToAdd;
-      
+
       if (data.length > 0) {
         restaurantToAdd = evaluatePlaces(data)
       } else {
@@ -157,7 +198,7 @@ exports.processURL = functions.region("europe-west2")
       }
 
       if (restaurantToAdd) {
-        var dataToPost = { ...flags, ...restaurantToAdd}
+        var dataToPost = { ...flags, ...restaurantToAdd }
         await db.collection("regions").doc(context.params.region).collection("restaurants").doc(restaurantToAdd.place_id).set(dataToPost)
       } else {
         console.debug("Failed to add to DB.")
@@ -186,22 +227,22 @@ exports.restaurantFromPlaceID = functions.region("europe-west2")
     }
 
     if (process.env.TEST_MAPS === 'true') {
-      
+
       try {
-        
+
         placeDetails = await client.placeDetails({ params: params })
         var deets = placeDetails.data.result
         deets.geometry.location.hash = geofire.geohashForLocation([deets.geometry.location.lat, deets.geometry.location.lng])
-        
-        if (deets.business_status === "OPERATIONAL") {  
-          docSnapshot.ref.set(deets, { merge: true})
+
+        if (deets.business_status === "OPERATIONAL") {
+          docSnapshot.ref.set(deets, { merge: true })
         } else {
           console.log("Restaurant is closed now.")
           docSnapshot.ref.delete()
         }
-      
+
       } catch (error) {
-        
+
         console.debug(error.response.data)
 
       }
