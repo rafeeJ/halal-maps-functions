@@ -99,8 +99,18 @@ const addToMailchimp = async (email) => {
   }
 }
 
-const sendEmail = async () => {
-  
+const sendEmail = async (email, displayName) => {
+  const mailOptions = {
+    from: `GetHalal <noreply@firebase.com>`,
+    to: email,
+  };
+
+  // The user subscribed to the newsletter.
+  mailOptions.subject = `Welcome to GetHalal`;
+  mailOptions.text = `Hey ${displayName || ''}! Welcome to GetHalal. I hope you will enjoy our service.`;
+  await mailTransport.sendMail(mailOptions);
+  functions.logger.log('New welcome email sent to:', email);
+  return null;
 }
 
 exports.sendWelcomeEmail = functions.auth.user().onCreate(async (user) => {
@@ -108,10 +118,7 @@ exports.sendWelcomeEmail = functions.auth.user().onCreate(async (user) => {
   const name = user.displayName
 
   const status = await addToMailchimp(email);
-
-
-  // await addToMailchimp
-  // await sendWelcomeEmail
+  return sendEmail(email, displayName)
 });
 
 exports.generateRestaurants = functions.region("europe-west2")
