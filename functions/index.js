@@ -133,8 +133,6 @@ exports.processURL = functions.region("europe-west2")
       console.debug("Using maps API")
       const client = new Client({});
 
-      console.debug(process.env.MAPS_API)
-
       var places = await client.findPlaceFromText({params: {
         key: process.env.MAPS_API,
         inputtype: "textquery",
@@ -144,7 +142,7 @@ exports.processURL = functions.region("europe-west2")
       }})
       
       var data = places.data.candidates
-      var restaurantToAdd;
+      var restaurantToAdd = null;
       
       if (data.length > 0) {
         restaurantToAdd = evaluatePlaces(data)
@@ -156,7 +154,7 @@ exports.processURL = functions.region("europe-west2")
         console.debug(data)
       }
 
-      if (restaurantToAdd) {
+      if (restaurantToAdd !== null) {
         var dataToPost = { ...flags, ...restaurantToAdd}
         await db.collection("regions").doc(context.params.region).collection("restaurants").doc(restaurantToAdd.place_id).set(dataToPost)
       } else {
