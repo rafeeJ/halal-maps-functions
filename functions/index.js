@@ -4,7 +4,8 @@ const { Client, Language, PlaceData } = require("@googlemaps/google-maps-service
 const geofire = require('geofire-common');
 
 const fetch = require("node-fetch");
-var _ = require("lodash")
+var _ = require("lodash");
+const { QuerySnapshot } = require("@google-cloud/firestore");
 
 const PROJECTID = "halal-dining-uk"
 
@@ -108,6 +109,44 @@ exports.generateRestaurants = functions.region("europe-west2")
       }
     }
   });
+
+exports.getRestaurantsForRegion = functions.region("europe-west2")
+  .runWith({ timeoutSeconds: 180, memory: "256MB" })
+  .https.onRequest(async (req, res) => {
+    const regionName = req.query.region
+    /** @type {QuerySnapshot} */
+    var restaurants = await db.collection("regions").doc(regionName).collection("restaurants").get()
+    var restData = []
+
+    for (const doc of restaurants.docs) {
+      var data = doc.data()
+      restData.push({
+        geometry: data.geometry,
+        name: data.name,
+        place_id: data.place_id,
+      })
+    }
+
+    res.send(restData)
+  });
+
+exports.getRestaurantFromPlaceID = functions.region("europe-west2")
+.runWith({ timeoutSeconds: 180, memory: "256MB" })
+.https.onRequest(async (req, res) => {
+  const placeID = req.query.placeID
+  const regionName = req.query.region
+
+  /** @type {QuerySnapshot} */
+  var restaurant = await db.collection("regions").doc(regionName).collection("restaurants").where('place_id', '==', placeID).get()
+
+  if (restaurant.empty) {
+    res.send(null)
+  } else {
+    res.send(restaurant.docs[0].data())
+  }
+});
+
+
 
 exports.processURL = functions.region("europe-west2")
   .runWith({ timeoutSeconds: 300, memory: "256MB" })
